@@ -1,0 +1,9 @@
+{
+    "name": "react-backend",
+    "private": true,
+    "version": "0.0.2",
+    "type": "module",
+    "scripts": {
+      "start": "deno run --allow-net --allow-write --allow-read index.js"
+    }
+}
