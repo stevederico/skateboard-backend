@@ -7,9 +7,9 @@ import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
 // Initialize SQLite database
 const db = new DB("my_database.db");
 
-// Create users table
+// Create users table with the updated schema
 db.execute(`
-  CREATE TABLE IF NOT EXISTS users (
+   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
@@ -45,62 +45,69 @@ serve(async (req) => {
 
   try {
     switch (path) {
+
+
       // POST /signup - Create new user
       case "/signup": {
         if (req.method !== "POST") break;
       
         try {
-          const { email, password, name } = await req.json();
+          const { email, password, name } = JSON.parse(await req.text());
+          const trimmedEmail = email?.trim();
+          const trimmedName = name?.trim();
       
-          // Input validation
-          if (!email || !password || !name) {
-            return new Response(JSON.stringify({ error: "Missing required fields" }), {
-              status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+          if (!trimmedEmail || !password?.trim() || !trimmedName) {
+            return new Response(
+              JSON.stringify({ error: "Missing required fields" }),
+              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
           }
       
-          // Email validation
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (!emailRegex.test(email.trim())) {
-            return new Response(JSON.stringify({ error: "Invalid email format" }), {
-              status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+          if (!emailRegex.test(trimmedEmail)) {
+            return new Response(
+              JSON.stringify({ error: "Invalid email format" }),
+              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
           }
       
-          // Check for existing user
-          const existingUser = await db.query("SELECT * FROM users WHERE email = ?", [email.trim()]);
+          const existingUser = [...db.query("SELECT * FROM users WHERE email = ?", [trimmedEmail])];
           if (existingUser.length > 0) {
-            return new Response(JSON.stringify({ error: "Email already exists" }), {
-              status: 409,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+            return new Response(
+              JSON.stringify({ error: "Email already exists" }),
+              { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
           }
       
-          // Hash password with explicit salt
           const salt = await bcrypt.genSalt(12);
           const hash = await bcrypt.hash(password, salt);
       
-          const result = await db.query(
+          await db.query(
             "INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
-            [email.trim(), hash, name.trim()]
+            [trimmedEmail, hash, trimmedName]
           );
+          const userId = db.lastInsertRowId;
       
-          const token = await generateToken(result.lastInsertRowId);
+          const [newUserRow] = [...db.query("SELECT id, email, name FROM users WHERE id = ?", [userId])];
+          const token = await generateToken(userId);
+          const responseObj = { id: newUserRow[0], email: newUserRow[1], name: newUserRow[2], token };
       
-          return new Response(JSON.stringify({ token }), {
+          return new Response(JSON.stringify(responseObj), {
             status: 201,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         } catch (error) {
-          console.error("Signup error:", error);
-          return new Response(JSON.stringify({ error: "Internal server error", details: error.message }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({ error: "Internal server error", details: error.message }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
       }
+      
+      
+
+
+
 
       // POST /signin - Authenticate user
       case "/signin": {
@@ -119,7 +126,8 @@ serve(async (req) => {
 
         if (user && await bcrypt.compare(password, user.password)) {
           const token = await generateToken(user.id);
-          return new Response(JSON.stringify({ token }), {
+          var responseObj = { 'email': user.email, 'id': user.id, 'name': user.name, 'token': token }
+          return new Response(JSON.stringify(responseObj), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
