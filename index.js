@@ -38,16 +38,11 @@ async function generateToken(userId) {
 
 // API Server
 serve(async (req) => {
-  // Handle CORS
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });   // Handle CORS
   const path = new URL(req.url).pathname;
 
   try {
     switch (path) {
-
-
-      // POST /signup - Create new user
       case "/signup": {
         if (req.method !== "POST") break;
       
@@ -104,11 +99,6 @@ serve(async (req) => {
         }
       }
       
-      
-
-
-
-
       // POST /signin - Authenticate user
       case "/signin": {
         if (req.method !== "POST") break;
