@@ -5,5 +5,7 @@ this starter tempalte provides:
 - SQLite
 - REST API for User Authenication
 
-
-Get started by running deno run --allow-net --allow-write --allow-read index.js  
+## Getting Started
+```shell
+deno run --allow-net --allow-write --allow-read index.js
+```
