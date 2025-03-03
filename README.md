@@ -37,7 +37,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Acknowledgements 
 
-- [sqlite]((https://github.com/sqlite/sqlite))
+- [sqlite](https://github.com/sqlite/sqlite)
 - [deno](https://github.com/denoland/deno)
 
 ## Contact
