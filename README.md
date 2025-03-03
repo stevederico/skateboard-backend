@@ -1,5 +1,5 @@
 # starter-backend
-a basic backend service for user authenication and sqlite.
+a basic backend service for user authentication and sqlite.
 
 ## Features
 - Deno 2.2
