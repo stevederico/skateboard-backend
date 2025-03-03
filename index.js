@@ -12,7 +12,8 @@ db.execute(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL
+    password TEXT NOT NULL,
+    name TEXT NOT NULL
   )
 `);
 
@@ -47,45 +48,103 @@ serve(async (req) => {
       // POST /signup - Create new user
       case "/signup": {
         if (req.method !== "POST") break;
-        const { email, password } = await req.json();
-        const hash = await bcrypt.hash(password);
-        db.query("INSERT INTO users (email, password) VALUES (?, ?)", [email.trim(), hash]);
-        const token = await generateToken(db.lastInsertRowId);
-        return new Response(JSON.stringify({ token }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      
+        try {
+          const { email, password, name } = await req.json();
+      
+          // Input validation
+          if (!email || !password || !name) {
+            return new Response(JSON.stringify({ error: "Missing required fields" }), {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+      
+          // Email validation
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(email.trim())) {
+            return new Response(JSON.stringify({ error: "Invalid email format" }), {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+      
+          // Check for existing user
+          const existingUser = await db.query("SELECT * FROM users WHERE email = ?", [email.trim()]);
+          if (existingUser.length > 0) {
+            return new Response(JSON.stringify({ error: "Email already exists" }), {
+              status: 409,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+      
+          // Hash password with explicit salt
+          const salt = await bcrypt.genSalt(12);
+          const hash = await bcrypt.hash(password, salt);
+      
+          const result = await db.query(
+            "INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
+            [email.trim(), hash, name.trim()]
+          );
+      
+          const token = await generateToken(result.lastInsertRowId);
+      
+          return new Response(JSON.stringify({ token }), {
+            status: 201,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        } catch (error) {
+          console.error("Signup error:", error);
+          return new Response(JSON.stringify({ error: "Internal server error", details: error.message }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
 
       // POST /signin - Authenticate user
       case "/signin": {
         if (req.method !== "POST") break;
-        const { email, password } = await req.json();
+        if (!req.headers.get("Content-Type")?.includes("application/json")) {
+          throw new Error("Content-Type must be application/json");
+        }
+
+        const body = await req.json();
+        const { email, password } = body;
+        if (!email || !password) {
+          throw new Error("Email and password are required");
+        }
+
         const [user] = [...db.queryEntries("SELECT * FROM users WHERE email = ?", [email.trim()])];
-        
+
         if (user && await bcrypt.compare(password, user.password)) {
           const token = await generateToken(user.id);
           return new Response(JSON.stringify({ token }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        throw new Error("Invalid credentials");
-      }
 
+        // Explicit response for invalid credentials
+        return new Response(JSON.stringify({ error: "Invalid credentials" }), {
+          status: 401, // Unauthorized status code
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       // GET /users - List all users (protected)
       case "/users": {
         if (req.method !== "GET") break;
         const token = req.headers.get("Authorization")?.split(" ")[1];
         if (!token) throw new Error("Unauthorized");
-        
+
         await verify(token, await generateToken());
-        const users = [...db.query("SELECT id, email FROM users")].map(([id, email]) => ({id, email}));
+        const users = [...db.query("SELECT id, email FROM users")].map(([id, email]) => ({ id, email }));
         return new Response(JSON.stringify(users), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
     }
 
-    return new Response(JSON.stringify({ error: "Not found" }), { 
+    return new Response(JSON.stringify({ error: "Not found" }), {
       status: 404,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
