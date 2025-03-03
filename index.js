@@ -24,7 +24,7 @@ db.execute(`
 
 // Stripe initialization (replace with your actual key)
 const stripe = new Stripe(Deno.env.get("STRIPE_KEY"));
-const YOUR_DOMAIN = `http://localhost:${Deno.env.get("PORT")}`;
+const YOUR_DOMAIN = `http://localhost:5173`;
 
 // JWT helper: Generates a token for a given userId
 async function generateToken(userId) {
@@ -41,9 +41,7 @@ async function generateToken(userId) {
 // Create Express app
 const app = express();
 
-// Middleware to parse JSON and URL-encoded data
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
 
 // Simple CORS middleware
 app.use((req, res, next) => {
@@ -55,6 +53,10 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+// Middleware to parse JSON and URL-encoded data
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // POST /signup - Create a new user
 app.post("/signup", async (req, res) => {
@@ -157,13 +159,14 @@ app.post("/create-checkout-session", async (req, res) => {
         },
       ],
       mode: "subscription",
-      success_url: `${YOUR_DOMAIN}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${YOUR_DOMAIN}?canceled=true`,
+      success_url: `${YOUR_DOMAIN}/app/?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${YOUR_DOMAIN}/app/?canceled=true`,
     });
-    res.redirect(303, session.url);
+    console.log("/create-checkout-session ", session.url);
+    res.status(200).json({ url: session.url }); // Return URL as JSON
   } catch (err) {
     console.error(err);
-    res.status(500).send("Stripe session creation failed");
+    res.status(500).json({ error: "Stripe session creation failed" });
   }
 });
 
@@ -176,7 +179,8 @@ app.post("/create-portal-session", async (req, res) => {
       customer: checkoutSession.customer,
       return_url: YOUR_DOMAIN,
     });
-    res.redirect(303, portalSession.url);
+    console.log("/create-portal-session ", portalSession.url);
+    res.status(200).json({ url: portalSession.url }); // Return URL as JSON
   } catch (err) {
     console.error(err);
     res.status(500).send("Stripe portal session creation failed");
@@ -189,7 +193,7 @@ app.post(
   express.raw({ type: "application/json" }),
   (req, res) => {
     let event = req.body;
-    const endpointSecret = "whsec_12345";
+    const endpointSecret = Deno.env.get("STRIPE_ENDPOINT_SECRET");
     if (endpointSecret) {
       const signature = req.headers["stripe-signature"];
       try {
