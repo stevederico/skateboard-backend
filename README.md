@@ -1,6 +1,7 @@
-#starter-backend
+# starter-backend
+a basic backend service for user authenication and sqlite.
 
-this starter tempalte provides:
+## Features
 - Deno 2.2
 - SQLite
 - REST API for User Authenication
