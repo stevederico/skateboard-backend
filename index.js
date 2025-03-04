@@ -151,19 +151,20 @@ app.post("/create-checkout-session", async (req, res) => {
       expand: ["data.product"],
     });
     const session = await stripe.checkout.sessions.create({
-      billing_address_collection: "auto",
+      customer_email: req.body.email,
+      mode: "subscription",
+      payment_method_types: ['card'],
       line_items: [
         {
           price: prices.data[0].id,
           quantity: 1,
         },
       ],
-      mode: "subscription",
+      billing_address_collection: 'auto', // or 'required'
       success_url: `${YOUR_DOMAIN}/app/?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${YOUR_DOMAIN}/app/?canceled=true`,
     });
-    console.log("/create-checkout-session ", session.url);
-    res.status(200).json({ url: session.url }); // Return URL as JSON
+    res.status(200).json({ url: session.url, id: session.id }); // Return URL as JSON
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Stripe session creation failed" });
@@ -173,14 +174,13 @@ app.post("/create-checkout-session", async (req, res) => {
 // POST /create-portal-session - Create a Stripe billing portal session
 app.post("/create-portal-session", async (req, res) => {
   try {
-    const { session_id } = req.body;
-    const checkoutSession = await stripe.checkout.sessions.retrieve(session_id);
+    const { customerID } = req.body;
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: checkoutSession.customer,
+      customer: customerID,
       return_url: YOUR_DOMAIN,
     });
     console.log("/create-portal-session ", portalSession.url);
-    res.status(200).json({ url: portalSession.url }); // Return URL as JSON
+    res.status(200).json({ url: portalSession.url, id: portalSession.id }); // Return URL as JSON
   } catch (err) {
     console.error(err);
     res.status(500).send("Stripe portal session creation failed");
@@ -208,6 +208,19 @@ app.post(
       }
     }
     switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        if (session.payment_status === 'paid' && session.customer) {
+          // Here you have the customer ID
+          const customerId = session.customer;
+
+          //write customerId to database
+
+          // Do something with customerId (store it, send it somewhere, etc.)
+          console.log('Successful payment, Customer ID:', customerId);
+        }
+        break;
+      }
       case "customer.subscription.trial_will_end": {
         const subscription = event.data.object;
         console.log(`Subscription status is ${subscription.status}.`);
