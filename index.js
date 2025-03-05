@@ -8,7 +8,6 @@ import { load } from "https://deno.land/std@0.195.0/dotenv/mod.ts";
 
 await load({ export: true });
 
-
 // Initialize SQLite database
 const db = new DB("my_database.db");
 
@@ -24,7 +23,7 @@ db.execute(`
 
 // Stripe initialization (replace with your actual key)
 const stripe = new Stripe(Deno.env.get("STRIPE_KEY"));
-const YOUR_DOMAIN = `http://localhost:5173`;
+const appURL = Deno.env.get("APP_URL")
 
 // JWT helper: Generates a token for a given userId
 async function generateToken(userId) {
@@ -41,7 +40,13 @@ async function generateToken(userId) {
 // Create Express app
 const app = express();
 
-
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf; // Store the raw buffer
+    }
+  })
+);
 
 // Simple CORS middleware
 app.use((req, res, next) => {
@@ -161,8 +166,8 @@ app.post("/create-checkout-session", async (req, res) => {
         },
       ],
       billing_address_collection: 'auto', // or 'required'
-      success_url: `${YOUR_DOMAIN}/app/?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${YOUR_DOMAIN}/app/?canceled=true`,
+      success_url: `${appURL}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appURL}/?canceled=true`,
     });
     res.status(200).json({ url: session.url, id: session.id }); // Return URL as JSON
   } catch (err) {
@@ -177,7 +182,7 @@ app.post("/create-portal-session", async (req, res) => {
     const { customerID } = req.body;
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerID,
-      return_url: YOUR_DOMAIN,
+      return_url: `${appURL}/?portal=return`,
     });
     console.log("/create-portal-session ", portalSession.url);
     res.status(200).json({ url: portalSession.url, id: portalSession.id }); // Return URL as JSON
@@ -191,14 +196,14 @@ app.post("/create-portal-session", async (req, res) => {
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
-  (req, res) => {
+  async (req, res) => {
     let event = req.body;
     const endpointSecret = Deno.env.get("STRIPE_ENDPOINT_SECRET");
     if (endpointSecret) {
       const signature = req.headers["stripe-signature"];
       try {
-        event = stripe.webhooks.constructEvent(
-          req.body,
+        event = await stripe.webhooks.constructEventAsync(
+          req.rawBody,
           signature,
           endpointSecret
         );
@@ -258,6 +263,10 @@ app.post(
 app.listen(Deno.env.get("PORT"), () =>
   console.log(`Express server running on port ${Deno.env.get("PORT")}`)
 );
+
+app.get("/test", async (req, res) => {
+  res.json({"status": "hello"})
+})
 
 // Cleanup on exit
 Deno.addSignalListener("SIGINT", () => {
