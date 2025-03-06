@@ -186,6 +186,68 @@ app.get("/me", async (req, res) => {
   }
 });
 
+// GET /isSubscriber - Check if the user is a subscriber
+app.get("/isSubscriber", async (req, res) => {
+  try {
+    // Get and validate authorization header
+    const authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Unauthorized: No valid token provided" });
+    }
+
+    const token = authHeader.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized: Token missing" });
+    }
+
+    // Verify token
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(Deno.env.get("JWT_SECRET")),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign", "verify"]
+    );
+
+    // Verify and decode the token
+    const payload = await verify(token, key);
+    const userId = payload.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized: Invalid token payload" });
+    }
+
+    // Fetch user subscription status from database
+    const [user] = [...db.queryEntries(
+      "SELECT stripeID, expires, subStatus FROM users WHERE id = ?",
+      [userId]
+    )];
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if user has an active subscription
+    const isSubscriber = user.stripeID && 
+                         user.subStatus === "active" && 
+                         (!user.expires || user.expires > Math.floor(Date.now() / 1000));
+
+    res.json({ 
+      isSubscriber,
+      subscriptionDetails: {
+        status: user.subStatus,
+        expiresAt: user.expires ? new Date(user.expires * 1000).toISOString() : null
+      }
+    });
+  } catch (error) {
+    console.error("Error in /isSubscriber endpoint:", error.message);
+    if (error.name === "JWTError") {
+      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+    }
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // POST /create-checkout-session - Create a Stripe checkout session
 app.post("/create-checkout-session", async (req, res) => {
   try {
