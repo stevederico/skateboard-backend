@@ -24,16 +24,14 @@ db.execute(`
   )
 `);
 
-
 // Stripe initialization (replace with your actual key)
 const stripe = new Stripe(Deno.env.get("STRIPE_KEY"));
-const appURL = Deno.env.get("APP_URL")
 
 // JWT helper: Generates a token for a given userId
 async function generateToken(userId) {
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode("secret"),
+    new TextEncoder().encode(Deno.env.get("JWT_SECRET")),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
@@ -66,6 +64,9 @@ app.use((req, res, next) => {
 // Middleware to parse JSON and URL-encoded data
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from the 'public' directory
+app.use(express.static("public"));
 
 // POST /signup - Create a new user
 app.post("/signup", async (req, res) => {
@@ -127,13 +128,20 @@ app.post("/signin", async (req, res) => {
   }
 });
 
-// GET /users - Protected route to list all users
-app.get("/users", async (req, res) => {
+app.get("/me", async (req, res) => {
   try {
+    // Get and validate authorization header
     const authHeader = req.headers["authorization"];
-    if (!authHeader) throw new Error("Unauthorized");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Unauthorized: No valid token provided" });
+    }
+
     const token = authHeader.split(" ")[1];
-    // Import the same key used in generateToken for verification
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized: Token missing" });
+    }
+
+    // Verify token using the same key as in generateToken
     const key = await crypto.subtle.importKey(
       "raw",
       new TextEncoder().encode("secret"),
@@ -141,16 +149,42 @@ app.get("/users", async (req, res) => {
       false,
       ["sign", "verify"]
     );
-    await verify(token, key);
-    const users = [...db.query("SELECT id, email FROM users")].map(([id, email]) => ({ id, email }));
-    res.json(users);
+
+    // Verify and decode the token
+    const payload = await verify(token, key);
+    const userId = payload.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized: Invalid token payload" });
+    }
+
+    // Fetch user from database
+    const [user] = [...db.queryEntries(
+      "SELECT id, email, name, stripeID, expires, subStatus FROM users WHERE id = ?",
+      [userId]
+    )];
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Return user details (excluding password)
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      stripeID: user.stripeID,
+      expires: user.expires,
+      subStatus: user.subStatus
+    });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error("Error in /me endpoint:", error.message);
+    if (error.name === "JWTError") {
+      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+    }
+    res.status(500).json({ error: "Internal server error" });
   }
 });
-
-// Serve static files from the 'public' directory
-app.use(express.static("public"));
 
 // POST /create-checkout-session - Create a Stripe checkout session
 app.post("/create-checkout-session", async (req, res) => {
@@ -159,6 +193,13 @@ app.post("/create-checkout-session", async (req, res) => {
       lookup_keys: [req.body.lookup_key],
       expand: ["data.product"],
     });
+
+    // Get the origin from the request headers
+    const origin = req.get("origin");
+    if (!origin) {
+      return res.status(400).json({ error: "Missing Origin header" });
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer_email: req.body.email,
       mode: "subscription",
@@ -170,16 +211,16 @@ app.post("/create-checkout-session", async (req, res) => {
         },
       ],
       billing_address_collection: 'auto', // or 'required'
-      success_url: `${appURL}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appURL}/?canceled=true`,
+      success_url: `${origin}/app/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/app?canceled=true`,
       subscription_data: {
         metadata: {
           email: req.body.email,
-        }
-      }
+        },
+      },
     });
 
-    res.status(200).json({ url: session.url, id: session.id, customerID: session.customer }); // Return URL as JSON
+    res.status(200).json({ url: session.url, id: session.id, customerID: session.customer });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Stripe session creation failed" });
@@ -188,11 +229,18 @@ app.post("/create-checkout-session", async (req, res) => {
 
 // POST /create-portal-session - Create a Stripe billing portal session
 app.post("/create-portal-session", async (req, res) => {
+
+  // Get the origin from the request headers
+  const origin = req.get("origin");
+  if (!origin) {
+    return res.status(400).json({ error: "Missing Origin header" });
+  }
+
   try {
     const { customerID } = req.body;
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerID,
-      return_url: `${appURL}/?portal=return`,
+      return_url: `${origin}/?portal=return`,
     });
     console.log("/create-portal-session ", portalSession.url);
     res.status(200).json({ url: portalSession.url, id: portalSession.id }); // Return URL as JSON
@@ -262,16 +310,9 @@ app.post(
   }
 );
 
-
-// Start Express server on port 
-
 app.listen(Deno.env.get("PORT"), () =>
   console.log(`Express server running on port ${Deno.env.get("PORT")}`)
 );
-
-app.get("/test", async (req, res) => {
-  res.json({"status": "hello"})
-})
 
 // Cleanup on exit
 Deno.addSignalListener("SIGINT", () => {
