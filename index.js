@@ -211,8 +211,8 @@ app.post("/create-checkout-session", async (req, res) => {
         },
       ],
       billing_address_collection: 'auto', // or 'required'
-      success_url: `${origin}/app/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/app?canceled=true`,
+      success_url: `${origin}/app/stripe?success=true`,
+      cancel_url: `${origin}/app/stripe?canceled=true`,
       subscription_data: {
         metadata: {
           email: req.body.email,
@@ -240,7 +240,7 @@ app.post("/create-portal-session", async (req, res) => {
     const { customerID } = req.body;
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerID,
-      return_url: `${origin}/?portal=return`,
+      return_url: `${origin}/app/stripe?portal=return`,
     });
     console.log("/create-portal-session ", portalSession.url);
     res.status(200).json({ url: portalSession.url, id: portalSession.id }); // Return URL as JSON
