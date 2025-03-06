@@ -17,9 +17,13 @@ db.execute(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    stripeID TEXT,
+    expires INTEGER,
+    subStatus TEXT
   )
 `);
+
 
 // Stripe initialization (replace with your actual key)
 const stripe = new Stripe(Deno.env.get("STRIPE_KEY"));
@@ -114,7 +118,7 @@ app.post("/signin", async (req, res) => {
     const [user] = [...db.queryEntries("SELECT * FROM users WHERE email = ?", [email.trim()])];
     if (user && (await bcrypt.compare(password, user.password))) {
       const token = await generateToken(user.id);
-      const responseObj = { id: user.id, email: user.email, name: user.name, token };
+      const responseObj = { id: user.id, email: user.email, name: user.name, stripeID: user.stripeID, expires: user.expires, subStatus: user.subStatus, token: token };
       return res.json(responseObj);
     }
     res.status(401).json({ error: "Invalid credentials" });
@@ -168,8 +172,14 @@ app.post("/create-checkout-session", async (req, res) => {
       billing_address_collection: 'auto', // or 'required'
       success_url: `${appURL}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appURL}/?canceled=true`,
+      subscription_data: {
+        metadata: {
+          email: req.body.email,
+        }
+      }
     });
-    res.status(200).json({ url: session.url, id: session.id }); // Return URL as JSON
+
+    res.status(200).json({ url: session.url, id: session.id, customerID: session.customer }); // Return URL as JSON
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Stripe session creation failed" });
@@ -197,66 +207,61 @@ app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    let event = req.body;
-    const endpointSecret = Deno.env.get("STRIPE_ENDPOINT_SECRET");
-    if (endpointSecret) {
-      const signature = req.headers["stripe-signature"];
-      try {
-        event = await stripe.webhooks.constructEventAsync(
-          req.rawBody,
-          signature,
-          endpointSecret
-        );
-      } catch (err) {
-        console.log(`⚠️  Webhook signature verification failed.`, err.message);
-        return res.sendStatus(400);
-      }
+    let event;
+    const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
+    const signature = req.headers["stripe-signature"];
+    try {
+      // req.body is already a Buffer because of express.raw()
+      event = await stripe.webhooks.constructEventAsync(
+        req.rawBody,
+        signature,
+        endpointSecret
+      );
+    } catch (err) {
+      console.error("Webhook signature verification failed:", err.message);
+      return res.sendStatus(400);
     }
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        if (session.payment_status === 'paid' && session.customer) {
-          // Here you have the customer ID
-          const customerId = session.customer;
 
-          //write customerId to database
+    // Extract common fields
+    const subscription = event.data.object;
+    const stripeID = subscription.customer;
+    const email = subscription.metadata.email;
 
-          // Do something with customerId (store it, send it somewhere, etc.)
-          console.log('Successful payment, Customer ID:', customerId);
-        }
-        break;
+    // Helper function to update the user record
+    const updateUserSubscription = async (email, stripeID, periodEnd, status) => {
+      const [user] = [...db.queryEntries("SELECT * FROM users WHERE email = ?", [email])];
+      if (!user) {
+        console.log(`No user found with email: ${email}`);
+        return;
       }
-      case "customer.subscription.trial_will_end": {
-        const subscription = event.data.object;
-        console.log(`Subscription status is ${subscription.status}.`);
-        break;
+      db.query(
+        "UPDATE users SET stripeID = ?, expires = ?, subStatus = ? WHERE email = ?",
+        [stripeID, periodEnd, status, email]
+      );
+      console.log(`Updated user ${user.email} => stripeID: ${stripeID}, expires: ${periodEnd}, subStatus: ${status}`);
+    };
+
+    try {
+      switch (event.type) {
+        case "customer.subscription.deleted":
+          console.log(`Processing DELETED event for ${email} with status ${subscription.status}`);
+          await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
+          break;
+        case "customer.subscription.updated":
+          console.log(`Processing UPDATED event for ${email} with status ${subscription.status}`);
+          await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
+          break;
+        default:
+          console.log(`Unhandled event type ${event.type}`);
       }
-      case "customer.subscription.deleted": {
-        const subscription = event.data.object;
-        console.log(`Subscription status is ${subscription.status}.`);
-        break;
-      }
-      case "customer.subscription.created": {
-        const subscription = event.data.object;
-        console.log(`Subscription status is ${subscription.status}.`);
-        break;
-      }
-      case "customer.subscription.updated": {
-        const subscription = event.data.object;
-        console.log(`Subscription status is ${subscription.status}.`);
-        break;
-      }
-      case "entitlements.active_entitlement_summary.updated": {
-        const subscription = event.data.object;
-        console.log(`Active entitlement summary updated for ${subscription}.`);
-        break;
-      }
-      default:
-        console.log(`Unhandled event type ${event.type}.`);
+    } catch (error) {
+      console.error("Error processing subscription event:", error.message);
+      return res.sendStatus(500);
     }
-    res.send();
+    res.sendStatus(200);
   }
 );
+
 
 // Start Express server on port 
 
