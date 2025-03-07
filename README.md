@@ -1,4 +1,4 @@
-# starter-backend
+# skateboard-backend
 a basic backend service for user authentication and sqlite.
 
 ## Features

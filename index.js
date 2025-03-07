@@ -1,30 +1,24 @@
 // @deno-types="npm:@types/express"
 import express from "npm:express";
-import { DB } from "https://deno.land/x/sqlite/mod.ts";
+import { MongoClient, ObjectId } from "npm:mongodb";
+import Stripe from "npm:stripe";
+
 import { create, verify } from "https://deno.land/x/djwt/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
-import Stripe from "stripe";
 import { load } from "https://deno.land/std@0.195.0/dotenv/mod.ts";
 
 await load({ export: true });
 
-// Initialize SQLite database
-const db = new DB("my_database.db");
+// Initialize MongoDB connection
+const client = new MongoClient(Deno.env.get("MONGODB_URI") || "mongodb://localhost:27017");
+await client.connect();
+const db = client.db("SkateboardApp");
+const users = db.collection("Users");
 
-// Create users table if it doesn't exist
-db.execute(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    name TEXT NOT NULL,
-    stripeID TEXT,
-    expires INTEGER,
-    subStatus TEXT
-  )
-`);
+// Ensure indexes for performance
+await users.createIndex({ email: 1 }, { unique: true });
 
-// Stripe initialization (replace with your actual key)
+// Stripe initialization
 const stripe = new Stripe(Deno.env.get("STRIPE_KEY"));
 
 // JWT helper: Generates a token for a given userId
@@ -84,24 +78,32 @@ app.post("/signup", async (req, res) => {
       return res.status(400).json({ error: "Invalid email format" });
     }
 
-    const existingUser = [...db.query("SELECT * FROM users WHERE email = ?", [trimmedEmail])];
-    if (existingUser.length > 0) {
+    const existingUser = await users.findOne({ email: trimmedEmail });
+    if (existingUser) {
       return res.status(409).json({ error: "Email already exists" });
     }
 
     const salt = await bcrypt.genSalt(12);
     const hash = await bcrypt.hash(password, salt);
 
-    db.query(
-      "INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
-      [trimmedEmail, hash, trimmedName]
-    );
-    const userId = db.lastInsertRowId;
-    const [newUserRow] = [...db.query("SELECT id, email, name FROM users WHERE id = ?", [userId])];
-    const token = await generateToken(userId);
-    const responseObj = { id: newUserRow[0], email: newUserRow[1], name: newUserRow[2], token };
-
-    res.status(201).json(responseObj);
+    const result = await users.insertOne({
+      email: trimmedEmail,
+      password: hash,
+      name: trimmedName,
+      stripeID: null,
+      expires: null,
+      subStatus: null
+    });
+    
+    const newUser = await users.findOne({ _id: result.insertedId });
+    const token = await generateToken(newUser._id.toString());
+    
+    res.status(201).json({
+      id: newUser._id.toString(),
+      email: newUser.email,
+      name: newUser.name,
+      token
+    });
   } catch (error) {
     res.status(500).json({ error: "Internal server error", details: error.message });
   }
@@ -116,10 +118,18 @@ app.post("/signin", async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) throw new Error("Email and password are required");
 
-    const [user] = [...db.queryEntries("SELECT * FROM users WHERE email = ?", [email.trim()])];
+    const user = await users.findOne({ email: email.trim() });
     if (user && (await bcrypt.compare(password, user.password))) {
-      const token = await generateToken(user.id);
-      const responseObj = { id: user.id, email: user.email, name: user.name, stripeID: user.stripeID, expires: user.expires, subStatus: user.subStatus, token: token };
+      const token = await generateToken(user._id.toString());
+      const responseObj = {
+        id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        stripeID: user.stripeID,
+        expires: user.expires,
+        subStatus: user.subStatus,
+        token: token
+      };
       return res.json(responseObj);
     }
     res.status(401).json({ error: "Invalid credentials" });
@@ -144,7 +154,7 @@ app.get("/me", async (req, res) => {
     // Verify token using the same key as in generateToken
     const key = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode("secret"),
+      new TextEncoder().encode(Deno.env.get("JWT_SECRET")),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["sign", "verify"]
@@ -159,10 +169,7 @@ app.get("/me", async (req, res) => {
     }
 
     // Fetch user from database
-    const [user] = [...db.queryEntries(
-      "SELECT id, email, name, stripeID, expires, subStatus FROM users WHERE id = ?",
-      [userId]
-    )];
+    const user = await users.findOne({ _id: new ObjectId(userId) });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -170,7 +177,7 @@ app.get("/me", async (req, res) => {
 
     // Return user details (excluding password)
     res.json({
-      id: user.id,
+      id: user._id.toString(),
       email: user.email,
       name: user.name,
       stripeID: user.stripeID,
@@ -218,10 +225,10 @@ app.get("/isSubscriber", async (req, res) => {
     }
 
     // Fetch user subscription status from database
-    const [user] = [...db.queryEntries(
-      "SELECT stripeID, expires, subStatus FROM users WHERE id = ?",
-      [userId]
-    )];
+    const user = await users.findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { stripeID: 1, expires: 1, subStatus: 1 } }
+    );
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -339,15 +346,17 @@ app.post(
 
     // Helper function to update the user record
     const updateUserSubscription = async (email, stripeID, periodEnd, status) => {
-      const [user] = [...db.queryEntries("SELECT * FROM users WHERE email = ?", [email])];
+      const user = await users.findOne({ email });
       if (!user) {
         console.log(`No user found with email: ${email}`);
         return;
       }
-      db.query(
-        "UPDATE users SET stripeID = ?, expires = ?, subStatus = ? WHERE email = ?",
-        [stripeID, periodEnd, status, email]
+      
+      await users.updateOne(
+        { email },
+        { $set: { stripeID, expires: periodEnd, subStatus: status } }
       );
+      
       console.log(`Updated user ${user.email} => stripeID: ${stripeID}, expires: ${periodEnd}, subStatus: ${status}`);
     };
 
@@ -377,7 +386,7 @@ app.listen(Deno.env.get("PORT"), () =>
 );
 
 // Cleanup on exit
-Deno.addSignalListener("SIGINT", () => {
-  db.close();
+Deno.addSignalListener("SIGINT", async () => {
+  await client.close();
   Deno.exit();
 });
