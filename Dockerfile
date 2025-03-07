@@ -1,5 +1,5 @@
 # Use an official Node runtime as a parent image
-FROM denoland/deno:2.1.4
+FROM denoland/deno:2.2.3
 
 # Set the working directory in the container
 WORKDIR /usr/src/app
@@ -25,4 +25,4 @@ ENV NODE_ENV=production
 
 EXPOSE 8000
 # Run the app when the container launches
-CMD ["deno", "run","--allow-net", "--allow-write", "--allow-env", "--allow-read", "--unstable-cron", "index.js"] 
+CMD ["deno", "run","--allow-net", "--allow-write", "--allow-env", "--allow-read", "--allow-sys", "index.js"] 

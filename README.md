@@ -1,19 +1,63 @@
-# skateboard-backend
-a basic backend service for user authentication and sqlite.
+# Skateboard Backend Application
+
+A backend API for the Skateboard application built with Deno and Hono.
 
 ## Features
-- Deno 2.2
-- SQLite
-- REST API for User Authenication
 
-## Getting Started
-```shell
-deno run --allow-net --allow-write --allow-read index.js
+- User authentication (signup, signin)
+- JWT token-based authorization
+- Stripe integration for subscriptions
+- MongoDB data storage
+
+## Prerequisites
+
+- Deno v2.2 or newer
+- MongoDB running locally or a MongoDB Atlas account
+- Stripe account for payment processing
+
+## Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
 ```
-## Usage
-```shell
-deno run start
+PORT=8000
+MONGODB_URI=mongodb://localhost:27017
+STRIPE_KEY=your_stripe_secret_key
+STRIPE_ENDPOINT_SECRET=your_stripe_webhook_secret
+JWT_SECRET=your_jwt_secret
 ```
+
+## Installation and Running
+
+1. Clone the repository
+2. Set up your environment variables in `.env`
+3. Run the application:
+
+```bash
+# Run in development mode (with file watching)
+deno run --allow-net --allow-read --allow-env --allow-write --watch index.js
+# or
+npm run dev
+
+# Run in production mode
+deno run --allow-net --allow-read --allow-env --allow-write index.js
+# or
+npm start
+```
+
+## API Endpoints
+
+- `POST /signup` - Create a new user
+- `POST /signin` - Authenticate user
+- `GET /me` - Get current user details
+- `GET /isSubscriber` - Check subscription status
+- `POST /create-checkout-session` - Create Stripe checkout session
+- `POST /create-portal-session` - Create Stripe billing portal session
+- `POST /webhook` - Handle Stripe webhooks
+
+## License
+
+MIT
 
 ## Contributing
 
@@ -31,13 +75,8 @@ We welcome contributions from the community! Please follow these guidelines:
    ```
 5. Open a pull request against the `master` branch.
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgements 
 
-- [sqlite](https://github.com/sqlite/sqlite)
 - [deno](https://github.com/denoland/deno)
 
 ## Contact

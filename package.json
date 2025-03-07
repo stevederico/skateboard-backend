@@ -1,14 +1,11 @@
 {
     "name": "skateboard-backend",
     "private": true,
-    "version": "0.0.3",
+    "version": "1.0.0",
+    "description": "Skateboard application backend",
     "type": "module",
     "scripts": {
-      "start": "deno run --allow-env --allow-read --allow-sys --allow-net index.js"
-    },
-    "dependencies": {
-        "express": "^4.21.2",
-        "stripe": "^17.7.0",
-        "mongodb": "^6.3.0"
+      "start": "deno run --allow-net --allow-read --allow-env --allow-write  --allow-sys index.js",
+      "dev": "deno run --allow-net --allow-read --allow-env --allow-write --allow-sys --watch index.js"
     }
 }

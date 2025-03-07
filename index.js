@@ -1,5 +1,7 @@
 // @deno-types="npm:@types/express"
-import express from "npm:express";
+import { Hono } from "https://deno.land/x/hono@v3.10.0/mod.ts";
+import { cors } from "https://deno.land/x/hono@v3.10.0/middleware.ts";
+import { serve } from "https://deno.land/std@0.195.0/http/server.ts";
 import { MongoClient, ObjectId } from "npm:mongodb";
 import Stripe from "npm:stripe";
 
@@ -33,54 +35,97 @@ async function generateToken(userId) {
   return create({ alg: "HS256", typ: "JWT" }, { userId }, key);
 }
 
-// Create Express app
-const app = express();
+// Create Hono app
+const app = new Hono();
 
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf; // Store the raw buffer
-    }
-  })
-);
+// CORS middleware
+app.use("*", cors({
+  origin: "*",
+  allowMethods: ["POST", "GET", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+}));
 
-// Simple CORS middleware
-app.use((req, res, next) => {
-  res.set({
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  });
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
+// Root route
+app.get("/", async (c) => {
+  try {
+    const file = await Deno.readFile("./public/index.html");
+    return new Response(file, {
+      headers: {
+        "Content-Type": "text/html",
+      },
+    });
+  } catch (e) {
+    return c.text("Welcome to Skateboard API", 200);
+  }
 });
 
-// Middleware to parse JSON and URL-encoded data
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware to store raw body for Stripe webhook
+app.use("/webhook", async (c, next) => {
+  const rawBody = await c.req.raw.clone().arrayBuffer();
+  c.set("rawBody", rawBody);
+  await next();
+});
 
 // Serve static files from the 'public' directory
-app.use(express.static("public"));
+app.use("/public/*", async (c) => {
+  const path = c.req.path.replace("/public/", "");
+  try {
+    const file = await Deno.readFile(`./public/${path}`);
+    const mimeType = getMimeType(path);
+    return new Response(file, {
+      headers: {
+        "Content-Type": mimeType,
+      },
+    });
+  } catch (e) {
+    return c.notFound();
+  }
+});
+
+function getMimeType(path) {
+  const ext = path.split(".").pop()?.toLowerCase();
+  const mimeTypes = {
+    html: "text/html",
+    css: "text/css",
+    js: "text/javascript",
+    json: "application/json",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    svg: "image/svg+xml",
+  };
+  return mimeTypes[ext] || "application/octet-stream";
+}
+
+// Health check endpoint
+app.get("/health", (c) => {
+  return c.json({
+    status: "ok",
+    timestamp: Date.now()
+  });
+});
 
 // POST /signup - Create a new user
-app.post("/signup", async (req, res) => {
+app.post("/signup", async (c) => {
   try {
-    const { email, password, name } = req.body;
+    const body = await c.req.json();
+    const { email, password, name } = body;
     const trimmedEmail = email?.trim();
     const trimmedName = name?.trim();
 
     if (!trimmedEmail || !password?.trim() || !trimmedName) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return c.json({ error: "Missing required fields" }, 400);
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(trimmedEmail)) {
-      return res.status(400).json({ error: "Invalid email format" });
+      return c.json({ error: "Invalid email format" }, 400);
     }
 
     const existingUser = await users.findOne({ email: trimmedEmail });
     if (existingUser) {
-      return res.status(409).json({ error: "Email already exists" });
+      return c.json({ error: "Email already exists" }, 409);
     }
 
     const salt = await bcrypt.genSalt(12);
@@ -98,24 +143,27 @@ app.post("/signup", async (req, res) => {
     const newUser = await users.findOne({ _id: result.insertedId });
     const token = await generateToken(newUser._id.toString());
     
-    res.status(201).json({
+    return c.json({
       id: newUser._id.toString(),
       email: newUser.email,
       name: newUser.name,
       token
-    });
+    }, 201);
   } catch (error) {
-    res.status(500).json({ error: "Internal server error", details: error.message });
+    return c.json({ error: "Internal server error", details: error.message }, 500);
   }
 });
 
 // POST /signin - Authenticate user
-app.post("/signin", async (req, res) => {
+app.post("/signin", async (c) => {
   try {
-    if (!req.headers["content-type"]?.includes("application/json")) {
+    if (!c.req.header("content-type")?.includes("application/json")) {
       throw new Error("Content-Type must be application/json");
     }
-    const { email, password } = req.body;
+    
+    const body = await c.req.json();
+    const { email, password } = body;
+    
     if (!email || !password) throw new Error("Email and password are required");
 
     const user = await users.findOne({ email: email.trim() });
@@ -130,25 +178,25 @@ app.post("/signin", async (req, res) => {
         subStatus: user.subStatus,
         token: token
       };
-      return res.json(responseObj);
+      return c.json(responseObj);
     }
-    res.status(401).json({ error: "Invalid credentials" });
+    return c.json({ error: "Invalid credentials" }, 401);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    return c.json({ error: error.message }, 400);
   }
 });
 
-app.get("/me", async (req, res) => {
+app.get("/me", async (c) => {
   try {
     // Get and validate authorization header
-    const authHeader = req.headers["authorization"];
+    const authHeader = c.req.header("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Unauthorized: No valid token provided" });
+      return c.json({ error: "Unauthorized: No valid token provided" }, 401);
     }
 
     const token = authHeader.split(" ")[1];
     if (!token) {
-      return res.status(401).json({ error: "Unauthorized: Token missing" });
+      return c.json({ error: "Unauthorized: Token missing" }, 401);
     }
 
     // Verify token using the same key as in generateToken
@@ -165,18 +213,18 @@ app.get("/me", async (req, res) => {
     const userId = payload.userId;
 
     if (!userId) {
-      return res.status(401).json({ error: "Unauthorized: Invalid token payload" });
+      return c.json({ error: "Unauthorized: Invalid token payload" }, 401);
     }
 
     // Fetch user from database
     const user = await users.findOne({ _id: new ObjectId(userId) });
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return c.json({ error: "User not found" }, 404);
     }
 
     // Return user details (excluding password)
-    res.json({
+    return c.json({
       id: user._id.toString(),
       email: user.email,
       name: user.name,
@@ -187,24 +235,24 @@ app.get("/me", async (req, res) => {
   } catch (error) {
     console.error("Error in /me endpoint:", error.message);
     if (error.name === "JWTError") {
-      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+      return c.json({ error: "Unauthorized: Invalid token" }, 401);
     }
-    res.status(500).json({ error: "Internal server error" });
+    return c.json({ error: "Internal server error" }, 500);
   }
 });
 
 // GET /isSubscriber - Check if the user is a subscriber
-app.get("/isSubscriber", async (req, res) => {
+app.get("/isSubscriber", async (c) => {
   try {
     // Get and validate authorization header
-    const authHeader = req.headers["authorization"];
+    const authHeader = c.req.header("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Unauthorized: No valid token provided" });
+      return c.json({ error: "Unauthorized: No valid token provided" }, 401);
     }
 
     const token = authHeader.split(" ")[1];
     if (!token) {
-      return res.status(401).json({ error: "Unauthorized: Token missing" });
+      return c.json({ error: "Unauthorized: Token missing" }, 401);
     }
 
     // Verify token
@@ -221,7 +269,7 @@ app.get("/isSubscriber", async (req, res) => {
     const userId = payload.userId;
 
     if (!userId) {
-      return res.status(401).json({ error: "Unauthorized: Invalid token payload" });
+      return c.json({ error: "Unauthorized: Invalid token payload" }, 401);
     }
 
     // Fetch user subscription status from database
@@ -231,7 +279,7 @@ app.get("/isSubscriber", async (req, res) => {
     );
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return c.json({ error: "User not found" }, 404);
     }
 
     // Check if user has an active subscription
@@ -239,7 +287,7 @@ app.get("/isSubscriber", async (req, res) => {
                          user.subStatus === "active" && 
                          (!user.expires || user.expires > Math.floor(Date.now() / 1000));
 
-    res.json({ 
+    return c.json({ 
       isSubscriber,
       subscriptionDetails: {
         status: user.subStatus,
@@ -249,28 +297,29 @@ app.get("/isSubscriber", async (req, res) => {
   } catch (error) {
     console.error("Error in /isSubscriber endpoint:", error.message);
     if (error.name === "JWTError") {
-      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+      return c.json({ error: "Unauthorized: Invalid token" }, 401);
     }
-    res.status(500).json({ error: "Internal server error" });
+    return c.json({ error: "Internal server error" }, 500);
   }
 });
 
 // POST /create-checkout-session - Create a Stripe checkout session
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", async (c) => {
   try {
+    const body = await c.req.json();
     const prices = await stripe.prices.list({
-      lookup_keys: [req.body.lookup_key],
+      lookup_keys: [body.lookup_key],
       expand: ["data.product"],
     });
 
     // Get the origin from the request headers
-    const origin = req.get("origin");
+    const origin = c.req.header("origin");
     if (!origin) {
-      return res.status(400).json({ error: "Missing Origin header" });
+      return c.json({ error: "Missing Origin header" }, 400);
     }
 
     const session = await stripe.checkout.sessions.create({
-      customer_email: req.body.email,
+      customer_email: body.email,
       mode: "subscription",
       payment_method_types: ['card'],
       line_items: [
@@ -279,111 +328,112 @@ app.post("/create-checkout-session", async (req, res) => {
           quantity: 1,
         },
       ],
-      billing_address_collection: 'auto', // or 'required'
+      billing_address_collection: 'auto',
       success_url: `${origin}/app/stripe?success=true`,
       cancel_url: `${origin}/app/stripe?canceled=true`,
       subscription_data: {
         metadata: {
-          email: req.body.email,
+          email: body.email,
         },
       },
     });
 
-    res.status(200).json({ url: session.url, id: session.id, customerID: session.customer });
+    return c.json({ url: session.url, id: session.id, customerID: session.customer });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Stripe session creation failed" });
+    return c.json({ error: "Stripe session creation failed" }, 500);
   }
 });
 
 // POST /create-portal-session - Create a Stripe billing portal session
-app.post("/create-portal-session", async (req, res) => {
-
+app.post("/create-portal-session", async (c) => {
   // Get the origin from the request headers
-  const origin = req.get("origin");
+  const origin = c.req.header("origin");
   if (!origin) {
-    return res.status(400).json({ error: "Missing Origin header" });
+    return c.json({ error: "Missing Origin header" }, 400);
   }
 
   try {
-    const { customerID } = req.body;
+    const body = await c.req.json();
+    const { customerID } = body;
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerID,
       return_url: `${origin}/app/stripe?portal=return`,
     });
     console.log("/create-portal-session ", portalSession.url);
-    res.status(200).json({ url: portalSession.url, id: portalSession.id }); // Return URL as JSON
+    return c.json({ url: portalSession.url, id: portalSession.id });
   } catch (err) {
     console.error(err);
-    res.status(500).send("Stripe portal session creation failed");
+    return c.json({ error: "Stripe portal session creation failed" }, 500);
   }
 });
 
 // POST /webhook - Handle Stripe webhooks
-app.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    let event;
-    const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
-    const signature = req.headers["stripe-signature"];
-    try {
-      // req.body is already a Buffer because of express.raw()
-      event = await stripe.webhooks.constructEventAsync(
-        req.rawBody,
-        signature,
-        endpointSecret
-      );
-    } catch (err) {
-      console.error("Webhook signature verification failed:", err.message);
-      return res.sendStatus(400);
-    }
-
-    // Extract common fields
-    const subscription = event.data.object;
-    const stripeID = subscription.customer;
-    const email = subscription.metadata.email;
-
-    // Helper function to update the user record
-    const updateUserSubscription = async (email, stripeID, periodEnd, status) => {
-      const user = await users.findOne({ email });
-      if (!user) {
-        console.log(`No user found with email: ${email}`);
-        return;
-      }
-      
-      await users.updateOne(
-        { email },
-        { $set: { stripeID, expires: periodEnd, subStatus: status } }
-      );
-      
-      console.log(`Updated user ${user.email} => stripeID: ${stripeID}, expires: ${periodEnd}, subStatus: ${status}`);
-    };
-
-    try {
-      switch (event.type) {
-        case "customer.subscription.deleted":
-          console.log(`Processing DELETED event for ${email} with status ${subscription.status}`);
-          await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
-          break;
-        case "customer.subscription.updated":
-          console.log(`Processing UPDATED event for ${email} with status ${subscription.status}`);
-          await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
-          break;
-        default:
-          console.log(`Unhandled event type ${event.type}`);
-      }
-    } catch (error) {
-      console.error("Error processing subscription event:", error.message);
-      return res.sendStatus(500);
-    }
-    res.sendStatus(200);
+app.post("/webhook", async (c) => {
+  let event;
+  const endpointSecret = Deno.env.get("STRIPE_ENDPOINT_SECRET");
+  const signature = c.req.header("stripe-signature");
+  
+  try {
+    // Get the raw body from middleware
+    const rawBody = c.get("rawBody");
+    event = await stripe.webhooks.constructEventAsync(
+      rawBody,
+      signature,
+      endpointSecret
+    );
+  } catch (err) {
+    console.error("Webhook signature verification failed:", err.message);
+    return new Response(null, { status: 400 });
   }
-);
 
-app.listen(Deno.env.get("PORT"), () =>
-  console.log(`Express server running on port ${Deno.env.get("PORT")}`)
-);
+  // Extract common fields
+  const subscription = event.data.object;
+  const stripeID = subscription.customer;
+  const email = subscription.metadata.email;
+
+  // Helper function to update the user record
+  const updateUserSubscription = async (email, stripeID, periodEnd, status) => {
+    const user = await users.findOne({ email });
+    if (!user) {
+      console.log(`No user found with email: ${email}`);
+      return;
+    }
+    
+    await users.updateOne(
+      { email },
+      { $set: { stripeID, expires: periodEnd, subStatus: status } }
+    );
+    
+    console.log(`Updated user ${user.email} => stripeID: ${stripeID}, expires: ${periodEnd}, subStatus: ${status}`);
+  };
+
+  try {
+    switch (event.type) {
+      case "customer.subscription.deleted":
+        console.log(`Processing DELETED event for ${email} with status ${subscription.status}`);
+        await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
+        break;
+      case "customer.subscription.updated":
+        console.log(`Processing UPDATED event for ${email} with status ${subscription.status}`);
+        await updateUserSubscription(email, stripeID, subscription.current_period_end, subscription.status);
+        break;
+      default:
+        console.log(`Unhandled event type ${event.type}`);
+    }
+  } catch (error) {
+    console.error("Error processing subscription event:", error.message);
+    return new Response(null, { status: 500 });
+  }
+  
+  return new Response(null, { status: 200 });
+});
+
+// Start the server
+const port = parseInt(Deno.env.get("PORT") || "8000");
+console.log(`Hono server running on port ${port}`);
+
+serve(app.fetch, { port });
 
 // Cleanup on exit
 Deno.addSignalListener("SIGINT", async () => {
