@@ -3,7 +3,7 @@ import { Hono } from "https://deno.land/x/hono@v3.10.0/mod.ts";
 import { cors } from "https://deno.land/x/hono@v3.10.0/middleware.ts";
 import { serve } from "https://deno.land/std@0.195.0/http/server.ts";
 import { MongoClient, ObjectId } from "npm:mongodb";
-import Stripe from "npm:stripe";
+import Stripe from "stripe";
 import { create, verify } from "https://deno.land/x/djwt/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
 import { load } from "https://deno.land/std@0.195.0/dotenv/mod.ts";
