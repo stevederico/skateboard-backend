@@ -11,7 +11,7 @@ import { load } from "https://deno.land/std@0.195.0/dotenv/mod.ts";
 // Load environment variables
 try {
   await load({ export: true });
-  if (!Deno.env.get("MONGODB_URI") || !Deno.env.get("STRIPE_KEY") || !Deno.env.get("JWT_SECRET")) {
+  if (!Deno.env.get("MONGO_URI") || !Deno.env.get("STRIPE_KEY") || !Deno.env.get("JWT_SECRET")) {
     throw new Error("Missing required environment variables");
   }
 } catch (e) {
@@ -20,7 +20,7 @@ try {
 }
 
 // MongoDB setup
-const client = new MongoClient(Deno.env.get("MONGODB_URI"));
+const client = new MongoClient(Deno.env.get("MONGO_URI"));
 try {
   await client.connect();
 } catch (e) {
