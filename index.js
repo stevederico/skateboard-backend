@@ -109,8 +109,7 @@ app.post("/signup", async (c) => {
     const { insertedId } = await users.insertOne({
       email: trimmedEmail,
       name: name.trim(),
-      created_at: Date.now(),
-      subscription: { stripeID: null, expires: null, status: null }
+      created_at: Date.now()
     });
     await auths.insertOne({ email: trimmedEmail, password: hash, userID: insertedId });
     
@@ -142,9 +141,16 @@ app.post("/signin", async (c) => {
       id: user._id.toString(),
       email: user.email,
       name: user.name,
-      subscription: { stripeID: user.subscription?.stripeID || null, expires: user.subscription?.expires || null, status: user.subscription?.status || null },
-      token
+      ...(user.subscription && {
+        subscription: {
+          stripeID: user.subscription.stripeID,
+          expires: user.subscription.expires,
+          status: user.subscription.status,
+        },
+      }),
+      token,
     });
+    
   } catch (e) {
     console.error("Signin error:", e.message);
     return c.json({ error: "Server error" }, 500);
@@ -158,9 +164,16 @@ app.get("/me", authMiddleware, async (c) => {
     id: user._id.toString(),
     email: user.email,
     name: user.name,
-    subscription: { stripeID: user.subscription?.stripeID || null, expires: user.subscription?.expires || null, status: user.subscription?.status || null }
+    ...(user.subscription && {
+      subscription: {
+        stripeID: user.subscription.stripeID,
+        expires: user.subscription.expires,
+        status: user.subscription.status,
+      },
+    }),
   });
 });
+
 
 app.get("/isSubscriber", authMiddleware, async (c) => {
   const user = await users.findOne(

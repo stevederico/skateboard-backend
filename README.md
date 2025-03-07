@@ -21,7 +21,7 @@ Create a `.env` file in the root directory with the following variables:
 
 ```
 PORT=8000
-MONGODB_URI=mongodb://localhost:27017
+MONGO_URI=mongodb://localhost:27017
 STRIPE_KEY=your_stripe_secret_key
 STRIPE_ENDPOINT_SECRET=your_stripe_webhook_secret
 JWT_SECRET=your_jwt_secret
