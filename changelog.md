@@ -1,6 +1,7 @@
 - db query/update/create
 - token expiration and invalidation
-- origin list/db name
+* db for origin
+* origin list
 * isProd
 * cron jobs
 * local env loading

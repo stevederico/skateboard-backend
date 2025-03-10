@@ -1,11 +1,22 @@
-import express from "express";
-import { MongoClient, ObjectId } from "mongodb";
-import Stripe from "stripe";
+import express from "npm:express";
+import { MongoClient, ObjectId } from "npm:mongodb";
+import Stripe from "npm:stripe";
 import { create, verify } from "https://deno.land/x/djwt/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.195.0/path/mod.ts";
 import { cron } from "https://deno.land/x/deno_cron/cron.ts";
+
+// Load config
+let config;
+try {
+  const configPath = resolve(dirname(fromFileUrl(import.meta.url)), './config.json');
+  const configData = await readFile(configPath, 'utf-8');
+  config = JSON.parse(configData);
+} catch (err) {
+  console.error('Failed to load config:', err);
+  config = [{ db: "SkateboardApp", origin: "http://localhost:3000" }];
+}
 
 // Always load env first
 if (!isProd()) {
@@ -14,7 +25,7 @@ if (!isProd()) {
   cron("Scheduled Task", "0 * * * *", async () => {
     console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
   });
-  
+
 }
 
 // Load environment variables after loadLocalENV completes
@@ -26,6 +37,9 @@ if (!MONGO_URI || !STRIPE_KEY || !JWT_SECRET) {
   console.error("Missing required environment variables");
   Deno.exit(1);
 }
+
+// Stripe setup
+const stripe = new Stripe(STRIPE_KEY);
 
 // MongoDB setup
 const mongoUri = MONGO_URI.trim();
@@ -45,46 +59,25 @@ try {
   console.error("MongoDB connection failed:", e.message);
   process.exit(1);
 }
-const db = client.db("SkateboardApp");
-const users = db.collection("Users");
-const auths = db.collection("Auths");
-await users.createIndex({ email: 1 }, { unique: true });
-await auths.createIndex({ email: 1 }, { unique: true });
 
-// Stripe setup
-const stripe = new Stripe(STRIPE_KEY);
+// Get database name based on origin
+const getDBName = (origin) => {
+  const configEntry = config.find(entry => entry.origin === origin) || config[0];
+  const dbName = configEntry.db;
+  console.log(`Using database: ${dbName} for origin: ${origin}`);
+  return dbName;
+};
 
-// JWT helpers
-const jwtKey = await crypto.subtle.importKey(
-  "raw",
-  new TextEncoder().encode(JWT_SECRET),
-  { name: "HMAC", hash: "SHA-256" },
-  false,
-  ["sign", "verify"]
-);
+// Initialize db and collections
+let db;
+let users;
+let auths;
 
-async function generateToken(userId) {
-  return create({ alg: "HS256", typ: "JWT" }, { userId }, jwtKey);
-}
-
-async function authMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
-  const token = authHeader.split(" ")[1];
-  try {
-    const payload = await verify(token, jwtKey);
-    req.userId = payload.userId;
-    next();
-  } catch {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-// Express app
+// Express app initialization
 const app = express();
-const allowedOrigins = ["http://localhost:3000", "https://example.com"];
+const allowedOrigins = config.map(entry => entry.origin);
 
-// ==== CORS ====
+// CORS and database middleware
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
@@ -94,7 +87,24 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
 });
+
+// Database switching middleware
+app.use((req, res, next) => {
+  const origin = req.headers.origin || 'default';
+  if (!db || db.databaseName !== getDBName(origin)) {
+    db = client.db(getDBName(origin));
+    users = db.collection("Users");
+    auths = db.collection("Auths");
+  }
+  next();
+});
+
 app.use(express.json());
+
+// Create indexes on first startup
+const initialDb = client.db(config[0].db);
+await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true });
+await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true });
 
 // ==== STATIC ====
 app.use("/public", express.static("./public"));
@@ -170,6 +180,32 @@ app.post("/signin", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+// JWT helpers
+const jwtKey = await crypto.subtle.importKey(
+  "raw",
+  new TextEncoder().encode(JWT_SECRET),
+  { name: "HMAC", hash: "SHA-256" },
+  false,
+  ["sign", "verify"]
+);
+
+async function generateToken(userId) {
+  return create({ alg: "HS256", typ: "JWT" }, { userId }, jwtKey);
+}
+
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  const token = authHeader.split(" ")[1];
+  try {
+    const payload = await verify(token, jwtKey);
+    req.userId = payload.userId;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
 
 // ==== USER-DATA ====
 app.get("/me", authMiddleware, async (req, res) => {
@@ -302,11 +338,11 @@ function loadLocalENV() {
     const lines = data.split(/\r?\n/);
     for (let line of lines) {
       if (!line || line.trim().startsWith('#')) continue;
-      
+
       // Split only on first = and handle quoted values
       let [key, ...valueParts] = line.split('=');
       let value = valueParts.join('='); // Rejoin in case value contains =
-      
+
       if (key && value) {
         key = key.trim();
         value = value.trim();
