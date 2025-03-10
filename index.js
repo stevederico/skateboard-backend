@@ -4,8 +4,7 @@ import { MongoClient, ObjectId } from "npm:mongodb";
 import Stripe from "npm:stripe";
 import { create, verify } from "https://deno.land/x/djwt/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
-import { readFile as denoReadFile } from "https://deno.land/std@0.195.0/fs/mod.ts";
-import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.195.0/path/mod.ts";
+import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.210.0/path/mod.ts";
 import { cron } from "https://deno.land/x/deno_cron/cron.ts";
 
 // ==== CONFIG & ENV ====
@@ -13,7 +12,7 @@ import { cron } from "https://deno.land/x/deno_cron/cron.ts";
 let config;
 try {
   const configPath = resolve(dirname(fromFileUrl(import.meta.url)), './config.json');
-  const configData = await denoReadFile(configPath);
+  const configData = await Deno.readFile(configPath);
   config = JSON.parse(new TextDecoder().decode(configData));
 } catch (err) {
   console.error('Failed to load config:', err);
@@ -109,15 +108,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // ==== JWT HELPERS ====
-const encoder = new TextEncoder();
-const jwtKey = await crypto.subtle.importKey(
-  "raw",
-  encoder.encode(JWT_SECRET),
-  { name: "HS256" },
-  true,
-  ["sign"]
-);
-
+// Remove the encoder and importKey since we'll use JWT_SECRET directly with djwt
 async function generateToken(userId) {
   const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 1 week from now
   return create({ alg: "HS256" }, { userId, exp }, JWT_SECRET);
@@ -128,7 +119,7 @@ async function authMiddleware(req, res, next) {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
   const token = authHeader.split(" ")[1];
   try {
-    const payload = await verify(token, jwtKey);
+    const payload = await verify(token, JWT_SECRET);
     req.userId = payload.userId;
     next();
   } catch {
