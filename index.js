@@ -76,8 +76,8 @@ let auths;
 
 // Create indexes on first startup
 const initialDb = client.db(config[0].db);
-await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true });
-await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true });
+await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true, name: "users_email_index" });
+await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true, name: "auths_email_index" });
 
 // ==== EXPRESS SETUP ====
 const app = express();
