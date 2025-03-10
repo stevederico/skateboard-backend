@@ -1,4 +1,5 @@
 
+- token expiration and invalidation
 * collection
 * added auth to mongo
 * updated Dockerfile
