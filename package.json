@@ -9,6 +9,7 @@
       "dev": "deno run --allow-net --allow-read --allow-env --allow-write --allow-sys --watch index.js"
     },
     "dependencies": {
+        "express": "^4.21.2",
         "mongodb": "^6.14.2",
         "stripe": "^17.7.0"
     }
