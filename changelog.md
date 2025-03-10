@@ -1,5 +1,5 @@
 - db query/update/create
-- token expiration and invalidation
+* token expiration 
 * db for origin
 * origin list
 * isProd

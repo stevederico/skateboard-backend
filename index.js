@@ -182,16 +182,18 @@ app.post("/signin", async (req, res) => {
 });
 
 // JWT helpers
+const encoder = new TextEncoder();
 const jwtKey = await crypto.subtle.importKey(
   "raw",
-  new TextEncoder().encode(JWT_SECRET),
-  { name: "HMAC", hash: "SHA-256" },
-  false,
-  ["sign", "verify"]
+  encoder.encode(JWT_SECRET),
+  { name: "HS256" },
+  true,
+  ["sign"]
 );
 
 async function generateToken(userId) {
-  return create({ alg: "HS256", typ: "JWT" }, { userId }, jwtKey);
+  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 1 week from now
+  return create({ alg: "HS256" }, { userId, exp }, JWT_SECRET);
 }
 
 async function authMiddleware(req, res, next) {
@@ -330,7 +332,6 @@ function isProd() {
 }
 
 function loadLocalENV() {
-  console.log("LOCAL ENV");
   const __dirname = dirname(fromFileUrl(import.meta.url));
   const envFilePath = resolve(__dirname, './.env');
   try {

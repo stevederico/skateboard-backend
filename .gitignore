@@ -1,5 +1,5 @@
 # Logs
-_worklog
-my_database.db
 .env
-
+.env
+.env.local
+.env.*
