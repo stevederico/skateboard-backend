@@ -1,4 +1,7 @@
 - db query/update/create
+- orgincheck skip for stripe webhook
+- write the token to auths
+- purchasers
 * token expiration 
 * db for origin
 * origin list
@@ -10,8 +13,3 @@
 * updated Dockerfile
 * switched from express to hono
 * changed name to skateboard-backend
-
-
-orgincheck skip for stripe webhook
--write the token to auths
-- purchasers?
