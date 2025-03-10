@@ -2,7 +2,7 @@
 import express from "npm:express";
 import { MongoClient, ObjectId } from "npm:mongodb";
 import Stripe from "npm:stripe";
-import { create, verify } from "https://deno.land/x/djwt/mod.ts";
+import { create, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
 import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.210.0/path/mod.ts";
 import { cron } from "https://deno.land/x/deno_cron/cron.ts";
@@ -16,7 +16,7 @@ try {
   config = JSON.parse(new TextDecoder().decode(configData));
 } catch (err) {
   console.error('Failed to load config:', err);
-  config = [{ db: "SkateboardApp", origin: "http://localhost:3000" }];
+  config = [{ db: "SkateboardApp", origin: "http://localhost:5173" }];
 }
 
 // Environment setup
@@ -74,10 +74,30 @@ let db;
 let users;
 let auths;
 
-// Create indexes on first startup
+// Create indexes on first startup if they don't exist
 const initialDb = client.db(config[0].db);
-await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true, name: "users_email_index" });
-await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true, name: "auths_email_index" });
+const usersCollection = initialDb.collection("Users");
+const authsCollection = initialDb.collection("Auths");
+
+// Check and create indexes if they don't exist
+async function ensureIndexes() {
+  const userIndexes = await usersCollection.listIndexes().toArray();
+  const authIndexes = await authsCollection.listIndexes().toArray();
+  
+  if (!userIndexes.some(index => index.key.email === 1)) {
+    await usersCollection.createIndex({ email: 1 }, { unique: true, name: "users_email_index" });
+  }
+  
+  if (!authIndexes.some(index => index.key.email === 1)) {
+    await authsCollection.createIndex({ email: 1 }, { unique: true, name: "auths_email_index" });
+  }
+}
+
+try {
+  await ensureIndexes();
+} catch (err) {
+  console.error('Error ensuring indexes:', err);
+}
 
 // ==== EXPRESS SETUP ====
 const app = express();
@@ -96,7 +116,7 @@ app.use((req, res, next) => {
 
 // Database switching middleware
 app.use((req, res, next) => {
-  const origin = req.headers.origin || 'default';
+  const origin = req.headers.origin;
   if (!db || db.databaseName !== getDBName(origin)) {
     db = client.db(getDBName(origin));
     users = db.collection("Users");
@@ -109,20 +129,62 @@ app.use(express.json());
 
 // ==== JWT HELPERS ====
 // Remove the encoder and importKey since we'll use JWT_SECRET directly with djwt
-async function generateToken(userId) {
-  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 1 week from now
-  return create({ alg: "HS256" }, { userId, exp }, JWT_SECRET);
+async function generateToken(userId, origin) {
+  try {
+    const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 1 week from now
+    const dbName = getDBName(origin);
+    const header = { alg: "HS256", typ: "JWT" };
+    const payload = { userId, exp, dbName };
+
+    const jwtSecret = Deno.env.get("JWT_SECRET");
+    if (!jwtSecret) throw new Error("JWT_SECRET not set");
+
+    const keyData = new TextEncoder().encode(jwtSecret);
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign", "verify"]
+    );
+
+    return await create(header, payload, cryptoKey);
+  } catch (error) {
+    console.error("Token generation error:", error);
+    throw error;
+  }
 }
 
 async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
-  const token = authHeader.split(" ")[1];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
-    const payload = await verify(token, JWT_SECRET);
+    const token = authHeader.split(" ")[1];
+    const keyData = new TextEncoder().encode(JWT_SECRET);
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+    const payload = await verify(token, cryptoKey, { algorithms: ["HS256"] });
+    
     req.userId = payload.userId;
+    req.dbName = payload.dbName;
+
+    if (!db || db.databaseName !== payload.dbName) {
+      db = client.db(payload.dbName);
+      users = db.collection("Users");
+      auths = db.collection("Auths");
+    }
+
     next();
-  } catch {
+  } catch (error) {
+    console.error("Token verification error:", error);
     return res.status(401).json({ error: "Invalid token" });
   }
 }
@@ -145,6 +207,12 @@ app.get("/health", (req, res) => res.json({ status: "ok", timestamp: Date.now() 
 // ==== AUTH ROUTES ====
 app.post("/signup", async (req, res) => {
   try {
+    const origin = req.headers.origin;
+    const dbName = getDBName(origin);
+    db = client.db(dbName);
+    users = db.collection("Users");
+    auths = db.collection("Auths");
+
     const { email, password, name } = req.body;
     const trimmedEmail = email?.trim();
     if (!trimmedEmail || !password?.trim() || !name?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
@@ -157,9 +225,8 @@ app.post("/signup", async (req, res) => {
       name: name.trim(),
       created_at: Date.now()
     });
+    const token = await generateToken(insertedId.toString(), req.headers.origin);
     await auths.insertOne({ email: trimmedEmail, password: hash, userID: insertedId });
-
-    const token = await generateToken(insertedId.toString());
     res.status(201).json({ id: insertedId.toString(), email: trimmedEmail, name: name.trim(), token });
   } catch (e) {
     if (e.code === 11000) return res.status(409).json({ error: "Email exists" });
@@ -170,6 +237,12 @@ app.post("/signup", async (req, res) => {
 
 app.post("/signin", async (req, res) => {
   try {
+    const origin = req.headers.origin;
+    const dbName = getDBName(origin);
+    db = client.db(dbName);
+    users = db.collection("Users");
+    auths = db.collection("Auths");
+
     if (!req.headers["content-type"]?.includes("application/json")) {
       return res.status(400).json({ error: "Invalid content type" });
     }
@@ -177,12 +250,19 @@ app.post("/signin", async (req, res) => {
     if (!email || !password) return res.status(400).json({ error: "Missing credentials" });
 
     const auth = await auths.findOne({ email: email.trim() });
-    if (!auth || !(await bcrypt.compare(password, auth.password))) return res.status(401).json({ error: "Invalid credentials" });
+    if (!auth || !(await bcrypt.compare(password, auth.password))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
-    const user = await users.findOne({ _id: auth.userID });
-    if (!user) return res.status(404).json({ error: "User not found" });
+    const user = await users.findOne({ _id: new ObjectId(auth.userID) });
+    if (!user) {
+      console.error("User not found for auth record:", auth);
+      return res.status(404).json({ error: "User not found" });
+    }
 
-    const token = await generateToken(user._id.toString());
+
+    const token = await generateToken(user._id.toString(), origin);
+    
     res.json({
       id: user._id.toString(),
       email: user.email,
@@ -197,7 +277,7 @@ app.post("/signin", async (req, res) => {
       token,
     });
   } catch (e) {
-    console.error("Signin error:", e.message);
+    console.error("Signin error:", e);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -351,7 +431,7 @@ function loadLocalENV() {
 }
 
 // ==== SERVER STARTUP ====
-const port = parseInt(Deno.env.get("PORT") || "8000");
+const port = parseInt(Deno.env.get("PORT") || "8008");
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
