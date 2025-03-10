@@ -257,7 +257,7 @@ app.post("/create-checkout-session", authMiddleware, async (req, res) => {
     if (!user || user.email !== email) return res.status(403).json({ error: "Email mismatch" });
 
     const prices = await stripe.prices.list({ lookup_keys: [lookup_key], expand: ["data.product"] });
-    const origin = req.headers.origin || Deno.env.get("APP_ORIGIN") || "http://localhost:8000";
+    const origin = req.headers.origin || config[0].origin;
 
     const session = await stripe.checkout.sessions.create({
       customer_email: email,
@@ -287,7 +287,7 @@ app.post("/create-portal-session", authMiddleware, async (req, res) => {
       return res.status(403).json({ error: "Unauthorized customerID" });
     }
 
-    const origin = req.headers.origin || Deno.env.get("APP_ORIGIN") || "http://localhost:8000";
+    const origin = req.headers.origin || config[0].origin;
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerID,
       return_url: `${origin}/app/stripe?portal=return`,
