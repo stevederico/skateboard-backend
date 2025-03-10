@@ -1,34 +1,34 @@
+// ==== IMPORTS ====
 import express from "npm:express";
 import { MongoClient, ObjectId } from "npm:mongodb";
 import Stripe from "npm:stripe";
 import { create, verify } from "https://deno.land/x/djwt/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
-import { readFile } from "node:fs/promises";
+import { readFile as denoReadFile } from "https://deno.land/std@0.195.0/fs/mod.ts";
 import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.195.0/path/mod.ts";
 import { cron } from "https://deno.land/x/deno_cron/cron.ts";
 
+// ==== CONFIG & ENV ====
 // Load config
 let config;
 try {
   const configPath = resolve(dirname(fromFileUrl(import.meta.url)), './config.json');
-  const configData = await readFile(configPath, 'utf-8');
-  config = JSON.parse(configData);
+  const configData = await denoReadFile(configPath);
+  config = JSON.parse(new TextDecoder().decode(configData));
 } catch (err) {
   console.error('Failed to load config:', err);
   config = [{ db: "SkateboardApp", origin: "http://localhost:3000" }];
 }
 
-// Always load env first
+// Environment setup
 if (!isProd()) {
   loadLocalENV();
 } else {
   cron("Scheduled Task", "0 * * * *", async () => {
     console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
   });
-
 }
 
-// Load environment variables after loadLocalENV completes
 const MONGO_URI = Deno.env.get("MONGO_URI");
 const STRIPE_KEY = Deno.env.get("STRIPE_KEY");
 const JWT_SECRET = Deno.env.get("JWT_SECRET");
@@ -38,6 +38,7 @@ if (!MONGO_URI || !STRIPE_KEY || !JWT_SECRET) {
   Deno.exit(1);
 }
 
+// ==== SERVICES SETUP ====
 // Stripe setup
 const stripe = new Stripe(STRIPE_KEY);
 
@@ -60,6 +61,7 @@ try {
   process.exit(1);
 }
 
+// ==== DATABASE HELPERS ====
 // Get database name based on origin
 const getDBName = (origin) => {
   const configEntry = config.find(entry => entry.origin === origin) || config[0];
@@ -73,7 +75,12 @@ let db;
 let users;
 let auths;
 
-// Express app initialization
+// Create indexes on first startup
+const initialDb = client.db(config[0].db);
+await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true });
+await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true });
+
+// ==== EXPRESS SETUP ====
 const app = express();
 const allowedOrigins = config.map(entry => entry.origin);
 
@@ -101,19 +108,42 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Create indexes on first startup
-const initialDb = client.db(config[0].db);
-await initialDb.collection("Users").createIndex({ email: 1 }, { unique: true });
-await initialDb.collection("Auths").createIndex({ email: 1 }, { unique: true });
+// ==== JWT HELPERS ====
+const encoder = new TextEncoder();
+const jwtKey = await crypto.subtle.importKey(
+  "raw",
+  encoder.encode(JWT_SECRET),
+  { name: "HS256" },
+  true,
+  ["sign"]
+);
 
-// ==== STATIC ====
+async function generateToken(userId) {
+  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 1 week from now
+  return create({ alg: "HS256" }, { userId, exp }, JWT_SECRET);
+}
+
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  const token = authHeader.split(" ")[1];
+  try {
+    const payload = await verify(token, jwtKey);
+    req.userId = payload.userId;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+// ==== STATIC ROUTES ====
 app.use("/public", express.static("./public"));
 
 app.get("/", async (req, res) => {
   try {
-    const file = await readFile("./public/index.html");
+    const file = await denoReadFile("./public/index.html");
     res.setHeader("Content-Type", "text/html");
-    res.send(file);
+    res.send(new TextDecoder().decode(file));
   } catch {
     res.status(200).send("Welcome to Skateboard API");
   }
@@ -121,7 +151,7 @@ app.get("/", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ status: "ok", timestamp: Date.now() }));
 
-// ==== AUTH ====
+// ==== AUTH ROUTES ====
 app.post("/signup", async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -181,35 +211,7 @@ app.post("/signin", async (req, res) => {
   }
 });
 
-// JWT helpers
-const encoder = new TextEncoder();
-const jwtKey = await crypto.subtle.importKey(
-  "raw",
-  encoder.encode(JWT_SECRET),
-  { name: "HS256" },
-  true,
-  ["sign"]
-);
-
-async function generateToken(userId) {
-  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 1 week from now
-  return create({ alg: "HS256" }, { userId, exp }, JWT_SECRET);
-}
-
-async function authMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
-  const token = authHeader.split(" ")[1];
-  try {
-    const payload = await verify(token, jwtKey);
-    req.userId = payload.userId;
-    next();
-  } catch {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-// ==== USER-DATA ====
+// ==== USER DATA ROUTES ====
 app.get("/me", authMiddleware, async (req, res) => {
   const user = await users.findOne({ _id: new ObjectId(req.userId) });
   if (!user) return res.status(404).json({ error: "User not found" });
@@ -244,7 +246,7 @@ app.get("/isSubscriber", authMiddleware, async (req, res) => {
   });
 });
 
-// ==== STRIPE ====
+// ==== STRIPE ROUTES ====
 app.post("/create-checkout-session", authMiddleware, async (req, res) => {
   try {
     const { email, lookup_key } = req.body;
@@ -320,7 +322,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   res.status(200).send();
 });
 
-//==== MISC ====
+// ==== UTILITY FUNCTIONS ====
 function isProd() {
   if (typeof Deno.env.get("ENV") === "undefined") {
     return false
@@ -357,7 +359,7 @@ function loadLocalENV() {
   }
 }
 
-// Server start
+// ==== SERVER STARTUP ====
 const port = parseInt(Deno.env.get("PORT") || "8000");
 
 app.listen(port, () => {
