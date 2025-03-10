@@ -22,8 +22,8 @@ USER deno
 
 # Define environment variable
 ENV PORT=8000
-ENV NODE_ENV=production
+ENV ENV=production
 
 EXPOSE 8000
 # Run the app when the container launches
-CMD ["deno", "run","--allow-net", "--allow-write", "--allow-env", "--allow-read", "--allow-sys", "index.js"] 
+CMD ["deno", "run","--allow-net", "--allow-write", "--allow-env", "--allow-read", "--allow-sys", "--unstable-cron", "index.js"] 

@@ -1,5 +1,9 @@
-
+- db query/update/create
 - token expiration and invalidation
+- origin list/db name
+* isProd
+* cron jobs
+* local env loading
 * collection
 * added auth to mongo
 * updated Dockerfile
