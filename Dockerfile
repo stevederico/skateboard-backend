@@ -13,6 +13,7 @@ RUN deno install
 # Bundle app source inside the Docker image
 COPY index.js ./
 COPY ./public ./public
+COPY config.json ./config.json
 
 # Change ownership of the working directory to the 'node' user
 RUN chown -R deno:deno /usr/src/app

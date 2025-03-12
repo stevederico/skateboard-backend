@@ -1,6 +1,6 @@
 [
     {
         "db": "SkateboardApp",
-        "origin": "https://example.com"
+        "origin": "http://localhost:5173"
     }
 ]
