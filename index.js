@@ -247,6 +247,10 @@ app.get("/", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ status: "ok", timestamp: Date.now() }));
 
+function generateUUID() {
+  return 'xxxx-xxxx-xxxx-xxxx'.replace(/x/g, () => Math.random().toString(16)[2] || '0');
+}
+
 // ==== AUTH ROUTES ====
 app.post("/signup", async (req, res) => {
   try {
@@ -256,21 +260,24 @@ app.post("/signup", async (req, res) => {
     users = db.collection("Users");
     auths = db.collection("Auths");
 
-    const { email, password, name } = req.body;
-    email = email?.toLowercase().trim()
+    var { email, password, name } = req.body;
+    email = email?.toLowerCase().trim()
     if (!email || !password?.trim() || !name?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Invalid input" });
     }
 
     const hash = await bcrypt.hash(password, await bcrypt.genSalt(12));
-    const { insertedId } = await users.insertOne({
+    let insertID = generateUUID()
+    const result = await users.insertOne({
+      _id: insertID,
       email: email,
       name: name.trim(),
       created_at: Date.now()
     });
-    const token = await generateToken(insertedId.toString(), req.headers.origin);
-    await auths.insertOne({ email: email, password: hash, userID: insertedId });
-    res.status(201).json({ id: insertedId.toString(), email: email, name: name.trim(), token });
+    console.log("RESULT ", result)
+    const token = await generateToken(insertID.toString(), req.headers.origin);
+    await auths.insertOne({ email: email, password: hash, userID: insertID });
+    res.status(201).json({ id: insertID.toString(), email: email, name: name.trim(), token });
   } catch (e) {
     if (e.code === 11000) return res.status(409).json({ error: "Email exists" });
     console.error("Signup error:", e.message);
@@ -338,6 +345,7 @@ app.post("/signin", async (req, res) => {
 // ==== USER DATA ROUTES ====
 app.get("/me", authMiddleware, async (req, res) => {
   const user = await users.findOne({ _id: req.userID });
+  console.log("/me checking for user with ID:", req.userID);
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(user);
 });
