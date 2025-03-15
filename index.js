@@ -22,9 +22,9 @@ try {
 if (!isProd()) {
   loadLocalENV();
 } else {
-  // cron("Scheduled Task", "0 * * * *", async () => {
-  //   console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
-  // });
+  cron("0 * * * *", async () => {
+    console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
+  });
 }
 
 const MONGO_URI = Deno.env.get("MONGO_URI");
