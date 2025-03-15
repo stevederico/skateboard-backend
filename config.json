@@ -2,5 +2,13 @@
     {
         "db": "SkateboardApp",
         "origin": "http://localhost:5173"
+    },
+    {
+        "db": "SkateboardApp",
+        "origin": "http://localhost:5174"
+    },
+    {
+        "db": "SkateboardApp",
+        "origin": "http://localhost:5175"
     }
 ]
