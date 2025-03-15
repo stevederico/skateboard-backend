@@ -274,8 +274,8 @@ app.post("/signup", async (req, res) => {
       name: name.trim(),
       created_at: Date.now()
     });
-    console.log("RESULT ", result)
-    const token = await generateToken(insertID.toString(), req.headers.origin);
+
+    const token = await generateToken(insertID, req.headers.origin);
     await auths.insertOne({ email: email, password: hash, userID: insertID });
     res.status(201).json({ id: insertID.toString(), email: email, name: name.trim(), token });
   } catch (e) {
@@ -308,19 +308,27 @@ app.post("/signin", async (req, res) => {
     email = email.toLowerCase().trim();
     console.log(`[${new Date().toISOString()}] Attempting signin for email:`, email);
 
+    // Check if auth exists
     const auth = await auths.findOne({ email: email });
     if (!auth) {
       console.log(`[${new Date().toISOString()}] Auth record not found for:`, email);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
+    //verify
+    if (!(await bcrypt.compare(password, auth.password))) {
+      console.log(`[${new Date().toISOString()}] Password verification failed for:`, email);
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // get user
     const user = await users.findOne({ email: email });
     if (!user) {
       console.error("User not found for auth record:", auth);
       return res.status(404).json({ error: "User not found" });
     }
 
-
+    // generate token
     const token = await generateToken(user._id.toString(), origin);
 
     res.json({
