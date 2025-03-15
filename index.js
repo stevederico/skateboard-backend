@@ -292,7 +292,7 @@ app.post("/signin", async (req, res) => {
       return res.status(400).json({ error: "Invalid content type" });
     }
 
-    const { email, password } = req.body;
+    var { email, password } = req.body;
     if (!email || !password) {
       console.log(`[${new Date().toISOString()}] Missing credentials`);
       return res.status(400).json({ error: "Missing credentials" });
