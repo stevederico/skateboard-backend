@@ -2,6 +2,8 @@
 - orgincheck skip for stripe webhook
 - write the token to auths
 - purchasers
+* improved cors
+* added /me
 * token expiration 
 * db for origin
 * origin list

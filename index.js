@@ -1,6 +1,6 @@
 // ==== IMPORTS ====
 import express from "npm:express";
-import { MongoClient, ObjectId } from "npm:mongodb";
+import { MongoClient } from "npm:mongodb";
 import Stripe from "npm:stripe";
 import { create, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt/mod.ts";
@@ -8,7 +8,6 @@ import { dirname, resolve, fromFileUrl } from "https://deno.land/std@0.210.0/pat
 import { cron } from "https://deno.land/x/deno_cron/cron.ts";
 
 // ==== CONFIG & ENV ====
-// Load config
 let config;
 try {
   const configPath = resolve(dirname(fromFileUrl(import.meta.url)), './config.json');
@@ -23,9 +22,9 @@ try {
 if (!isProd()) {
   loadLocalENV();
 } else {
-  cron("Scheduled Task", "0 * * * *", async () => {
-    console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
-  });
+  // cron("Scheduled Task", "0 * * * *", async () => {
+  //   console.log(`Hourly Completed at ${new Date().toLocaleTimeString()}`);
+  // });
 }
 
 const MONGO_URI = Deno.env.get("MONGO_URI");
@@ -83,11 +82,11 @@ const authsCollection = initialDb.collection("Auths");
 async function ensureIndexes() {
   const userIndexes = await usersCollection.listIndexes().toArray();
   const authIndexes = await authsCollection.listIndexes().toArray();
-  
+
   if (!userIndexes.some(index => index.key.email === 1)) {
     await usersCollection.createIndex({ email: 1 }, { unique: true, name: "users_email_index" });
   }
-  
+
   if (!authIndexes.some(index => index.key.email === 1)) {
     await authsCollection.createIndex({ email: 1 }, { unique: true, name: "auths_email_index" });
   }
@@ -103,14 +102,57 @@ try {
 const app = express();
 const allowedOrigins = config.map(entry => entry.origin);
 
-// CORS and database middleware
+// Enhanced logging middleware
 app.use((req, res, next) => {
+  // Log incoming request details
+  console.log(`[${new Date().toISOString()}] Request:`, {
+    method: req.method,
+    path: req.originalUrl,
+    origin: req.headers.origin || 'none',
+    headers: {
+      'content-type': req.headers['content-type'],
+      'authorization': req.headers.authorization ? 'present' : 'none'
+    }
+  });
+
+  res.on('finish', () => {
+    // Enhanced response logging
+    console.log(`[${new Date().toISOString()}] Response:`, {
+      statusCode: res.statusCode,
+      method: req.method,
+      path: req.originalUrl,
+      headers: res.getHeaders()
+    });
+
+    // Additional status-specific logging
+    if (res.statusCode === 503) {
+      console.error(`[503] ${req.method} ${req.originalUrl} - ${new Date().toISOString()}`);
+    } else {
+      console.log(`[${res.statusCode}] ${req.method} ${req.originalUrl}`);
+    }
+  });
+
+  next();
+});
+
+// CORS middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] CORS:`, {
+    origin: req.headers.origin || 'none',
+    method: req.method
+  });
+
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    console.log(`[${new Date().toISOString()}] Handling preflight request`);
+    return res.status(204).end();
+  }
   next();
 });
 
@@ -129,12 +171,12 @@ app.use(express.json());
 
 // ==== JWT HELPERS ====
 // Remove the encoder and importKey since we'll use JWT_SECRET directly with djwt
-async function generateToken(userId, origin) {
+async function generateToken(userID, origin) {
   try {
     const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 1 week from now
     const dbName = getDBName(origin);
     const header = { alg: "HS256", typ: "JWT" };
-    const payload = { userId, exp, dbName };
+    const payload = { userID, exp, dbName };
 
     const jwtSecret = Deno.env.get("JWT_SECRET");
     if (!jwtSecret) throw new Error("JWT_SECRET not set");
@@ -156,6 +198,7 @@ async function generateToken(userId, origin) {
 }
 
 async function authMiddleware(req, res, next) {
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -172,8 +215,8 @@ async function authMiddleware(req, res, next) {
       ["verify"]
     );
     const payload = await verify(token, cryptoKey, { algorithms: ["HS256"] });
-    
-    req.userId = payload.userId;
+
+    req.userID = payload.userID;
     req.dbName = payload.dbName;
 
     if (!db || db.databaseName !== payload.dbName) {
@@ -214,20 +257,20 @@ app.post("/signup", async (req, res) => {
     auths = db.collection("Auths");
 
     const { email, password, name } = req.body;
-    const trimmedEmail = email?.trim();
-    if (!trimmedEmail || !password?.trim() || !name?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    email = email?.toLowercase().trim()
+    if (!email || !password?.trim() || !name?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Invalid input" });
     }
 
     const hash = await bcrypt.hash(password, await bcrypt.genSalt(12));
     const { insertedId } = await users.insertOne({
-      email: trimmedEmail,
+      email: email,
       name: name.trim(),
       created_at: Date.now()
     });
     const token = await generateToken(insertedId.toString(), req.headers.origin);
-    await auths.insertOne({ email: trimmedEmail, password: hash, userID: insertedId });
-    res.status(201).json({ id: insertedId.toString(), email: trimmedEmail, name: name.trim(), token });
+    await auths.insertOne({ email: email, password: hash, userID: insertedId });
+    res.status(201).json({ id: insertedId.toString(), email: email, name: name.trim(), token });
   } catch (e) {
     if (e.code === 11000) return res.status(409).json({ error: "Email exists" });
     console.error("Signup error:", e.message);
@@ -239,22 +282,32 @@ app.post("/signin", async (req, res) => {
   try {
     const origin = req.headers.origin;
     const dbName = getDBName(origin);
+
     db = client.db(dbName);
     users = db.collection("Users");
     auths = db.collection("Auths");
 
     if (!req.headers["content-type"]?.includes("application/json")) {
+      console.log(`[${new Date().toISOString()}] Invalid content type:`, req.headers["content-type"]);
       return res.status(400).json({ error: "Invalid content type" });
     }
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Missing credentials" });
 
-    const auth = await auths.findOne({ email: email.trim() });
-    if (!auth || !(await bcrypt.compare(password, auth.password))) {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      console.log(`[${new Date().toISOString()}] Missing credentials`);
+      return res.status(400).json({ error: "Missing credentials" });
+    }
+
+    email = email.toLowerCase().trim();
+    console.log(`[${new Date().toISOString()}] Attempting signin for email:`, email);
+
+    const auth = await auths.findOne({ email: email });
+    if (!auth) {
+      console.log(`[${new Date().toISOString()}] Auth record not found for:`, email);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const user = await users.findOne({ _id: new ObjectId(auth.userID) });
+    const user = await users.findOne({ email: email });
     if (!user) {
       console.error("User not found for auth record:", auth);
       return res.status(404).json({ error: "User not found" });
@@ -262,7 +315,7 @@ app.post("/signin", async (req, res) => {
 
 
     const token = await generateToken(user._id.toString(), origin);
-    
+
     res.json({
       id: user._id.toString(),
       email: user.email,
@@ -284,25 +337,46 @@ app.post("/signin", async (req, res) => {
 
 // ==== USER DATA ROUTES ====
 app.get("/me", authMiddleware, async (req, res) => {
-  const user = await users.findOne({ _id: new ObjectId(req.userId) });
+  const user = await users.findOne({ _id: req.userID });
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({
-    id: user._id.toString(),
-    email: user.email,
-    name: user.name,
-    ...(user.subscription && {
-      subscription: {
-        stripeID: user.subscription.stripeID,
-        expires: user.subscription.expires,
-        status: user.subscription.status,
-      },
-    }),
-  });
+  return res.json(user);
+});
+
+app.put("/me", authMiddleware, async (req, res) => {
+  try {
+    // Find user first to verify existence
+    const user = await users.findOne({ _id: req.userID });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Remove fields that shouldn't be updateable
+    const update = { ...req.body };
+    delete update._id;
+    delete update.email;
+    delete update.created_at;
+    delete update.subscription;
+
+    // Update user document
+    const result = await users.updateOne(
+      { _id: req.userID },
+      { $set: update }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(500).json({ error: "No changes made" });
+    }
+
+    // Return updated user
+    const updatedUser = await users.findOne({ _id: req.userID });
+    return res.json(updatedUser);
+  } catch (err) {
+    console.error("Update user error:", err);
+    return res.status(500).json({ error: "Failed to update user" });
+  }
 });
 
 app.get("/isSubscriber", authMiddleware, async (req, res) => {
   const user = await users.findOne(
-    { _id: new ObjectId(req.userId) },
+    { _id: req.userID },
     { projection: { "subscription.stripeID": 1, "subscription.expires": 1, "subscription.status": 1 } }
   );
   if (!user) return res.status(404).json({ error: "User not found" });
@@ -324,7 +398,7 @@ app.post("/create-checkout-session", authMiddleware, async (req, res) => {
     if (!email || !lookup_key) return res.status(400).json({ error: "Missing email or lookup_key" });
 
     // Verify the email matches the authenticated user
-    const user = await users.findOne({ _id: new ObjectId(req.userId) });
+    const user = await users.findOne({ _id: req.userID });
     if (!user || user.email !== email) return res.status(403).json({ error: "Email mismatch" });
 
     const prices = await stripe.prices.list({ lookup_keys: [lookup_key], expand: ["data.product"] });
@@ -353,7 +427,7 @@ app.post("/create-portal-session", authMiddleware, async (req, res) => {
     if (!customerID) return res.status(400).json({ error: "Missing customerID" });
 
     // Verify the customerID matches the authenticated user's subscription
-    const user = await users.findOne({ _id: new ObjectId(req.userId) });
+    const user = await users.findOne({ _id: req.userID });
     if (!user || (user.subscription?.stripeID && user.subscription.stripeID !== customerID)) {
       return res.status(403).json({ error: "Unauthorized customerID" });
     }
@@ -431,11 +505,32 @@ function loadLocalENV() {
 }
 
 // ==== SERVER STARTUP ====
-const port = parseInt(Deno.env.get("PORT") || "8008");
+const port = parseInt(Deno.env.get("PORT") || "8000");
 
-app.listen(port, '::', () => {
+//'::' is very important you need it to listen on ipv6!
+let server = app.listen(port, '::', () => {
   console.log(`Server running on port ${port}`);
 });
+
+// Handle graceful shutdown on SIGTERM NEED THIS FOR PROXY, it will not work without it
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Closing server gracefully...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+// Optional: Handle SIGINT for Ctrl+C NEED THIS FOR PROXY, it will not work without it
+process.on('SIGINT', () => {
+  console.log('SIGINT received. Shutting down gracefully...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+
 
 // Handle shutdown gracefully
 Deno.addSignalListener("SIGINT", async () => {
@@ -443,3 +538,4 @@ Deno.addSignalListener("SIGINT", async () => {
   await client.close();
   Deno.exit();
 });
+
