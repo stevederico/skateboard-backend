@@ -1,6 +1,6 @@
 # Skateboard Backend Application
 
-A backend API for the Skateboard application built with Deno and Hono.
+A backend API for the Skateboard application built with Deno and Express.
 
 ## Features
 
