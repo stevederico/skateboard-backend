@@ -555,3 +555,23 @@ Deno.addSignalListener("SIGINT", async () => {
   Deno.exit();
 });
 
+
+
+// Optional: Handle SIGINT for Ctrl+C NEED THIS FOR PROXY, it will not work without it
+process.on('SIGINT', () => {
+  console.log('SIGINT received. Shutting down gracefully...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+
+
+// Handle shutdown gracefully
+Deno.addSignalListener("SIGINT", async () => {
+  console.log("Shutting down...");
+  await client.close();
+  Deno.exit();
+});
+
