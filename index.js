@@ -169,12 +169,18 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+const tokenExpirationDays = 7;
+
 // ==== JWT HELPERS ====
+function tokenExpireTimestamp(){
+  return Math.floor(Date.now() / 1000) + tokenExpirationDays * 24 * 60 * 60; // 1 week from now
+}
+
 // Remove the encoder and importKey since we'll use JWT_SECRET directly with djwt
 async function generateToken(userID, origin) {
   try {
-    const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 1 week from now
-    const dbName = getDBName(origin);
+    const exp = tokenExpireTimestamp(); 
+    const dbName = "A";
     const header = { alg: "HS256", typ: "JWT" };
     const payload = { userID, exp, dbName };
 
@@ -277,7 +283,11 @@ app.post("/signup", async (req, res) => {
 
     const token = await generateToken(insertID, req.headers.origin);
     await auths.insertOne({ email: email, password: hash, userID: insertID });
-    res.status(201).json({ id: insertID.toString(), email: email, name: name.trim(), token });
+    res.status(201).json({ id: insertID.toString(), email: email, name: name.trim(), 
+      token: token,
+      tokenExpires: expiresTimestamp() 
+       
+    });
   } catch (e) {
     if (e.code === 11000) return res.status(409).json({ error: "Email exists" });
     console.error("Signup error:", e.message);
@@ -342,7 +352,8 @@ app.post("/signin", async (req, res) => {
           status: user.subscription.status,
         },
       }),
-      token,
+      token: token,
+      tokenExpires: tokenExpireTimestamp()
     });
   } catch (e) {
     console.error("Signin error:", e);
