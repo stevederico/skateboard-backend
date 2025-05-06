@@ -125,7 +125,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     console.log(`Webhook: ${event.type} for ${customerEmail}`);
     const user = await users.findOne({ email: customerEmail });
     if (user) {
-      await users.updateOne({ email: customerEmail }, { $set: { subscription: { stripeID, expires: current_period_end, status, lookupKey: lookup_key } } });
+      await users.updateOne({ email: customerEmail }, { $set: { subscription: { stripeID, expires: current_period_end, status } } });
     } else {
       console.warn(`Webhook: No user found for email ${customerEmail}`);
     }
