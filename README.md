@@ -27,6 +27,21 @@ STRIPE_ENDPOINT_SECRET=your_stripe_webhook_secret
 JWT_SECRET=your_jwt_secret
 ```
 
+## Stripe API key Recommendations
+Create a restricted stripe api key with the following permissions
+- checkout write
+- products read
+- price read
+- customers read
+
+## Stripe Webhook Events
+- customer.subscription.created
+- customer.subscription.deleted
+- customer.subscription.updated
+
+## Stripe Product
+- You must add a lookup_key to the stripe product's price, this will be used by Stripe Checkout
+
 ## Installation and Running
 
 1. Clone the repository

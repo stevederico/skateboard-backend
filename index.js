@@ -102,6 +102,37 @@ try {
 const app = express();
 const allowedOrigins = config.map(entry => entry.origin);
 
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  console.log("Webhook received");
+
+  const signature = req.headers["stripe-signature"];
+  let event;
+  try {
+    // req.body is a Buffer here, as required by Stripe
+    event = await stripe.webhooks.constructEventAsync(req.body, signature, Deno.env.get("STRIPE_ENDPOINT_SECRET"));
+    console.log("Webhook event:", event);
+  } catch (e) {
+    console.error("Webhook signature verification failed:", e.message);
+    return res.status(400).send();
+  }
+
+  let myDB = client.db("MyApp");
+  let users = myDB.collection("Users");
+  const { customer: stripeID, current_period_end, status } = event.data.object;
+  const customer = await stripe.customers.retrieve(stripeID);
+  const customerEmail = customer.email.toLowerCase();
+  if (["customer.subscription.deleted", "customer.subscription.updated","customer.subscription.created"].includes(event.type)) {
+    console.log(`Webhook: ${event.type} for ${customerEmail}`);
+    const user = await users.findOne({ email: customerEmail });
+    if (user) {
+      await users.updateOne({ email: customerEmail }, { $set: { subscription: { stripeID, expires: current_period_end, status, lookupKey: lookup_key } } });
+    } else {
+      console.warn(`Webhook: No user found for email ${customerEmail}`);
+    }
+  }
+  res.status(200).send();
+});
+
 // Enhanced logging middleware
 app.use((req, res, next) => {
   // Log incoming request details
@@ -471,28 +502,7 @@ app.post("/create-portal-session", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const signature = req.headers["stripe-signature"];
-  let event;
-  try {
-    event = await stripe.webhooks.constructEvent(req.body, signature, Deno.env.get("STRIPE_ENDPOINT_SECRET"));
-  } catch (e) {
-    console.error("Webhook signature verification failed:", e.message);
-    return res.status(400).send();
-  }
 
-  const { customer: stripeID, metadata: { email }, current_period_end, status } = event.data.object;
-  if (["customer.subscription.deleted", "customer.subscription.updated"].includes(event.type)) {
-    console.log(`Webhook: ${event.type} for ${email}`);
-    const user = await users.findOne({ email });
-    if (user) {
-      await users.updateOne({ email }, { $set: { subscription: { stripeID, expires: current_period_end, status } } });
-    } else {
-      console.warn(`Webhook: No user found for email ${email}`);
-    }
-  }
-  res.status(200).send();
-});
 
 // ==== UTILITY FUNCTIONS ====
 function isProd() {
